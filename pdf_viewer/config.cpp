@@ -312,6 +312,7 @@ bool ADJUST_ANNOTATION_COLORS_FOR_DARK_MODE = true;
 #ifdef Q_OS_MACOS
 float MACOS_TITLEBAR_COLOR[3] = { -1.0f, -1.0f, -1.0f };
 bool MACOS_HIDE_TITLEBAR = false;
+bool MACOS_HIDE_TITLEBAR_BUTTONS = false;
 #endif
 
 std::wstring RULER_DISPLAY_MODE = L"underline";
@@ -1156,6 +1157,7 @@ ConfigManager::ConfigManager(const Path& default_path, const Path& auto_path, co
 #ifdef Q_OS_MACOS
     add_color3(L"macos_titlebar_color", MACOS_TITLEBAR_COLOR);
     add_bool(L"macos_hide_titlebar", &MACOS_HIDE_TITLEBAR);
+    add_bool(L"macos_hide_titlebar_buttons", &MACOS_HIDE_TITLEBAR_BUTTONS);
 #endif
 
     std::wstring highlight_config_string = L"highlight_color_a";

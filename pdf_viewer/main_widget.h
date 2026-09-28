@@ -428,6 +428,10 @@ public:
     void set_color_mode_to_system_theme();
     void toggle_statusbar();
     void toggle_titlebar();
+#ifdef Q_OS_MACOS
+    bool macos_titlebar_hidden = false;
+    void apply_macos_titlebar();
+#endif
 
     void add_text_annotation_to_selected_highlight(const std::wstring& annot_text);
 

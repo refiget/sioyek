@@ -1,6 +1,7 @@
 #include <AppKit/AppKit.h>
 #include <QWidget>
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 
 extern "C" void showLookupForString(WId winId, const char* text, double x, double y) {
     if (winId == 0 || text == nullptr) return;
@@ -22,78 +23,109 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
     window.backgroundColor = [NSColor colorWithRed:red green:green blue:blue alpha: alpha];
 }
 
-@interface DraggableTitleView : NSView
+@interface SioyekTitlebarController : NSObject {
+    NSWindow* window;
+    BOOL hideTitlebar;
+    BOOL hideButtons;
+    BOOL useTitlebarColor;
+    BOOL transitioning;
+    BOOL originalFullSizeContent;
+    BOOL originalTransparent;
+    NSWindowTitleVisibility originalTitleVisibility;
+}
+- (instancetype)initWithWindow:(NSWindow*)nativeWindow;
+- (void)setHidden:(BOOL)hidden buttonsHidden:(BOOL)buttonsHidden colored:(BOOL)colored;
+- (void)apply;
 @end
 
-@implementation DraggableTitleView
+@implementation SioyekTitlebarController
 
-// Handle mouse click events
-- (void)mouseDown:(NSEvent *)event {
-    // double-click to zoom
-    if ([event clickCount] == 2) {
-        [self.window zoom:nil];
-    } else {
-        // drag Window
-        [self.window performWindowDragWithEvent:event];
+- (instancetype)initWithWindow:(NSWindow*)nativeWindow {
+    self = [super init];
+    if (self) {
+        window = nativeWindow;
+        originalFullSizeContent = (window.styleMask & NSWindowStyleMaskFullSizeContentView) != 0;
+        originalTransparent = window.titlebarAppearsTransparent;
+        originalTitleVisibility = window.titleVisibility;
+        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+        [center addObserver:self selector:@selector(willChangeFullscreen:)
+                       name:NSWindowWillEnterFullScreenNotification object:window];
+        [center addObserver:self selector:@selector(willChangeFullscreen:)
+                       name:NSWindowWillExitFullScreenNotification object:window];
+        [center addObserver:self selector:@selector(didChangeFullscreen:)
+                       name:NSWindowDidEnterFullScreenNotification object:window];
+        [center addObserver:self selector:@selector(didChangeFullscreen:)
+                       name:NSWindowDidExitFullScreenNotification object:window];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [super dealloc];
+}
+
+- (void)setHidden:(BOOL)hidden buttonsHidden:(BOOL)buttonsHidden colored:(BOOL)colored {
+    hideTitlebar = hidden;
+    hideButtons = buttonsHidden;
+    useTitlebarColor = colored;
+    [self apply];
+}
+
+- (void)willChangeFullscreen:(NSNotification*)notification {
+    transitioning = YES;
+    // AppKit owns the titlebar during the native fullscreen animation.
+    for (NSNumber* button in @[@(NSWindowCloseButton), @(NSWindowMiniaturizeButton), @(NSWindowZoomButton)]) {
+        [[window standardWindowButton:(NSWindowButton)button.integerValue] setHidden:NO];
     }
 }
 
-- (void)updateTrackingAreas {
-    [self initTrackingArea];
+- (void)didChangeFullscreen:(NSNotification*)notification {
+    transitioning = NO;
+    [self apply];
 }
 
--(void) initTrackingArea {
-    NSTrackingAreaOptions options = (NSTrackingActiveAlways | NSTrackingInVisibleRect |
-            NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved);
-
-    NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:[self bounds]
-        options:options
-        owner:self
-        userInfo:nil];
-
-    [self addTrackingArea:area];
-}
--(void)mouseEntered:(NSEvent *)event {
-    if((self.window.styleMask & NSWindowStyleMaskFullScreen) == 0) {
-        [[self.window standardWindowButton: NSWindowCloseButton] setHidden:NO];
-        [[self.window standardWindowButton: NSWindowMiniaturizeButton] setHidden:NO];
-        [[self.window standardWindowButton: NSWindowZoomButton] setHidden:NO];
+- (void)apply {
+    if (transitioning) return;
+    BOOL fullscreen = (window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    if (!fullscreen) {
+        NSWindowStyleMask mask = window.styleMask;
+        if (hideTitlebar || originalFullSizeContent) {
+            mask |= NSWindowStyleMaskFullSizeContentView;
+        } else {
+            mask &= ~NSWindowStyleMaskFullSizeContentView;
+        }
+        // Keep the titled/resizable style, as kitty's titlebar-only mode does.
+        // Changing Qt window flags would recreate the native window instead.
+        if (mask != window.styleMask) {
+            NSResponder* responder = [window.firstResponder retain];
+            [window setStyleMask:mask];
+            [window makeFirstResponder:responder];
+            [responder release];
+        }
+        window.titleVisibility = hideTitlebar ? NSWindowTitleHidden : originalTitleVisibility;
+        window.titlebarAppearsTransparent = hideTitlebar || useTitlebarColor || originalTransparent;
     }
-}
-
--(void)mouseExited:(NSEvent *)event {
-    if((self.window.styleMask & NSWindowStyleMaskFullScreen) == 0) {
-        [[self.window standardWindowButton: NSWindowCloseButton] setHidden:YES];
-        [[self.window standardWindowButton: NSWindowMiniaturizeButton] setHidden:YES];
-        [[self.window standardWindowButton: NSWindowZoomButton] setHidden:YES];
+    // Keep the system fullscreen controls available, matching kitty.
+    BOOL hidden = !fullscreen && (hideTitlebar || hideButtons);
+    for (NSNumber* button in @[@(NSWindowCloseButton), @(NSWindowMiniaturizeButton), @(NSWindowZoomButton)]) {
+        [[window standardWindowButton:(NSWindowButton)button.integerValue] setHidden:hidden];
     }
 }
 
 @end
 
-extern "C" void hideWindowTitleBar(WId winId) {
+extern "C" void setWindowTitleBarHidden(WId winId, bool hidden, bool buttonsHidden, bool colored) {
     if (winId == 0) return;
+    NSWindow* window = [(NSView*)winId window];
+    if (window == nil) return;
 
-    NSView* nativeView = reinterpret_cast<NSView*>(winId);
-    NSWindow* nativeWindow = [nativeView window];
-
-    if(nativeWindow.titleVisibility == NSWindowTitleHidden){
-        return;
+    static char titlebarControllerKey;
+    SioyekTitlebarController* controller = objc_getAssociatedObject(window, &titlebarControllerKey);
+    if (controller == nil) {
+        controller = [[SioyekTitlebarController alloc] initWithWindow:window];
+        objc_setAssociatedObject(window, &titlebarControllerKey, controller, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [controller release];
     }
-
-    [[nativeWindow standardWindowButton: NSWindowCloseButton] setHidden:YES];
-    [[nativeWindow standardWindowButton: NSWindowMiniaturizeButton] setHidden:YES];
-    [[nativeWindow standardWindowButton: NSWindowZoomButton] setHidden:YES];
-    NSRect contentViewBounds = nativeWindow.contentView.bounds;
-
-    DraggableTitleView *titleBarView = [[DraggableTitleView alloc] initWithFrame:NSMakeRect(0, 0, contentViewBounds.size.width, 22)];
-    titleBarView.autoresizingMask = NSViewWidthSizable;
-    titleBarView.wantsLayer = YES;
-    titleBarView.layer.backgroundColor = [[NSColor clearColor] CGColor];
-
-    [nativeWindow.contentView addSubview:titleBarView];
-
-    [nativeWindow setTitleVisibility:NSWindowTitleHidden];
-    [nativeWindow setStyleMask:[nativeWindow styleMask] | NSWindowStyleMaskFullSizeContentView];
-    [nativeWindow setTitlebarAppearsTransparent:YES];
+    [controller setHidden:hidden buttonsHidden:buttonsHidden colored:colored];
 }

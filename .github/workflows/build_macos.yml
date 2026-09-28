@@ -1,0 +1,68 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: clang_64
+          modules: 'qtmultimedia qtspeech qtshadertools'
+          cache: true
+
+      - name: Build MuPDF
+        run: make -C mupdf HAVE_GLUT=no -j"$(sysctl -n hw.logicalcpu)"
+
+      - name: Build Sioyek
+        run: |
+          qmake pdf_viewer_build_config.pro CONFIG+=release CONFIG+=non_portable QMAKE_APPLE_DEVICE_ARCHS=${{ matrix.arch }}
+          make -j"$(sysctl -n hw.logicalcpu)"
+
+      - name: Package application
+        run: |
+          mkdir -p dist
+          ditto sioyek.app dist/sioyek.app
+          resources=dist/sioyek.app/Contents/Resources
+          cp -R pdf_viewer/shaders "$resources/shaders"
+          cp pdf_viewer/prefs.config pdf_viewer/prefs_user.config pdf_viewer/keys.config pdf_viewer/keys_user.config tutorial.pdf "$resources/"
+          macdeployqt dist/sioyek.app -qmldir=pdf_viewer/touchui
+          codesign --force --deep --sign - dist/sioyek.app
+          codesign --verify --deep --strict dist/sioyek.app
+          lipo -verify_arch ${{ matrix.arch }} dist/sioyek.app/Contents/MacOS/sioyek
+          ditto -c -k --sequesterRsrc --keepParent dist/sioyek.app dist/sioyek-macos-${{ matrix.arch }}.zip
+
+      - name: Upload application
+        uses: actions/upload-artifact@v4
+        with:
+          name: sioyek-macos-${{ matrix.arch }}
+          path: dist/sioyek-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 30

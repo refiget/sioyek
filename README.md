@@ -49,6 +49,40 @@ Ubuntu | [sioyek](https://packages.ubuntu.com/sioyek) | [@viccie30](https://gith
 
 ## Documentation
 You can view the official documentation [here](https://sioyek-documentation.readthedocs.io/en/latest/).
+### macOS titlebar and traffic lights
+
+To hide the titlebar and traffic lights at startup, add this to `prefs_user.config`:
+
+```text
+macos_hide_titlebar 1
+```
+
+To keep the titlebar but hide just the traffic lights, use:
+
+```text
+macos_hide_titlebar 0
+macos_hide_titlebar_buttons 1
+```
+
+Both settings default to `0` and support live reload. Bind the existing command in
+`keys_user.config` to switch the titlebar for the current window and its helper:
+
+```text
+toggle_titlebar <f8>
+```
+
+The command changes the current window's appearance without saving the startup
+preference. The buttons-only setting still applies when the titlebar is restored.
+Native fullscreen controls remain available; the configured appearance is restored
+on leaving fullscreen. Hidden buttons do not reappear on hover.
+
+This follows kitty's macOS `hide_window_decorations titlebar-only` approach:
+retain the native titled/resizable window, extend content into the titlebar using
+`NSWindowStyleMaskFullSizeContentView`, and hide the title and standard buttons.
+The window keeps its native edge resizing and rounded corners. The old transparent
+drag overlay is removed so it cannot intercept document clicks.
+Reference: [kitty Cocoa window implementation](https://github.com/kovidgoyal/kitty/blob/c73326a9d861eba56b97a068ffd9ea5fd4a75d2d/glfw/cocoa_window.m#L4174).
+
 ## Feature Video Overview
 
 [![Sioyek feature overview](https://img.youtube.com/vi/yTmCI0Xp5vI/0.jpg)](https://www.youtube.com/watch?v=yTmCI0Xp5vI)
