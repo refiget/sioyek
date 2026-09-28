@@ -53,10 +53,12 @@ jobs:
           resources=dist/sioyek.app/Contents/Resources
           cp -R pdf_viewer/shaders "$resources/shaders"
           cp pdf_viewer/prefs.config pdf_viewer/prefs_user.config pdf_viewer/keys.config pdf_viewer/keys_user.config tutorial.pdf "$resources/"
+          # Qt Quick only needs SQLite; other SQL drivers require external database clients.
+          find "$QT_ROOT_DIR/plugins/sqldrivers" -name '*.dylib' ! -name libqsqlite.dylib -delete
           macdeployqt dist/sioyek.app -qmldir=pdf_viewer/touchui
           codesign --force --deep --sign - dist/sioyek.app
           codesign --verify --deep --strict dist/sioyek.app
-          lipo -verify_arch ${{ matrix.arch }} dist/sioyek.app/Contents/MacOS/sioyek
+          lipo dist/sioyek.app/Contents/MacOS/sioyek -verify_arch ${{ matrix.arch }}
           ditto -c -k --sequesterRsrc --keepParent dist/sioyek.app dist/sioyek-macos-${{ matrix.arch }}.zip
 
       - name: Upload application
