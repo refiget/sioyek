@@ -1,7 +1,7 @@
 #include <AppKit/AppKit.h>
 #include <QWidget>
 #include <QLayout>
-#include <QMainWindow>
+#include <QEvent>
 #include <QPointer>
 #include <algorithm>
 #include <vector>
@@ -28,9 +28,75 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
     window.backgroundColor = [NSColor colorWithRed:red green:green blue:blue alpha: alpha];
 }
 
-struct TitlebarContent {
-    QPointer<QWidget> widget;
-    bool respectsSafeArea;
+class TitlebarContentController : public QObject {
+    struct Content {
+        QPointer<QWidget> widget;
+        bool respectsSafeArea;
+    };
+    QPointer<QWidget> window;
+    std::vector<Content> contents;
+    bool extended = false;
+    bool updating = false;
+
+    static void updateMargins(QWidget* widget, bool respectsSafeArea) {
+        if (widget->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea) == respectsSafeArea) return;
+        widget->setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, respectsSafeArea);
+        if (widget->layout()) {
+            widget->layout()->invalidate();
+            widget->layout()->activate();
+        }
+        widget->updateGeometry();
+        widget->update();
+    }
+
+    void sync() {
+        if (!window || updating) return;
+        updating = true;
+        contents.erase(std::remove_if(contents.begin(), contents.end(), [this](const Content& content) {
+            if (!content.widget) return true;
+            if (content.widget->window() == window) return false;
+            content.widget->removeEventFilter(this);
+            updateMargins(content.widget, content.respectsSafeArea);
+            return true;
+        }), contents.end());
+
+        auto widgets = window->findChildren<QWidget*>();
+        widgets.prepend(window);
+        for (QWidget* widget : widgets) {
+            // Dialogs, native menus and other top-level windows own their own geometry.
+            if (widget->window() != window) continue;
+            auto found = std::find_if(contents.begin(), contents.end(), [widget](const Content& content) {
+                return content.widget == widget;
+            });
+            if (found == contents.end()) {
+                contents.push_back({widget, widget->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea)});
+                widget->installEventFilter(this);
+            }
+        }
+        // Nested layouts and overlays can each add the titlebar inset independently.
+        for (const auto& content : contents) {
+            if (content.widget) updateMargins(content.widget, !extended && content.respectsSafeArea);
+        }
+        updating = false;
+    }
+
+    bool eventFilter(QObject* object, QEvent* event) override {
+        if (event->type() == QEvent::ChildPolished || event->type() == QEvent::Show
+            || event->type() == QEvent::ParentChange) {
+            sync();
+        }
+        return QObject::eventFilter(object, event);
+    }
+
+public:
+    explicit TitlebarContentController(QWidget* widget) : QObject(widget), window(widget) {
+        sync();
+    }
+
+    void setExtended(bool value) {
+        extended = value;
+        sync();
+    }
 };
 
 static char titlebarControllerKey;
@@ -44,12 +110,11 @@ static char titlebarControllerKey;
     BOOL originalFullSizeContent;
     BOOL originalTransparent;
     NSWindowTitleVisibility originalTitleVisibility;
-    std::vector<TitlebarContent> contentWidgets;
+    QPointer<TitlebarContentController> contentController;
 }
 - (instancetype)initWithWindow:(NSWindow*)nativeWindow widget:(QWidget*)widget;
 - (void)setHidden:(BOOL)hidden buttonsHidden:(BOOL)buttonsHidden colored:(BOOL)colored;
 - (void)setContentExtended:(BOOL)extended;
-- (void)addContent:(QWidget*)widget;
 - (void)apply;
 @end
 
@@ -62,10 +127,7 @@ static char titlebarControllerKey;
         originalFullSizeContent = (window.styleMask & NSWindowStyleMaskFullSizeContentView) != 0;
         originalTransparent = window.titlebarAppearsTransparent;
         originalTitleVisibility = window.titleVisibility;
-        [self addContent:widget];
-        if (auto mainWindow = qobject_cast<QMainWindow*>(widget)) {
-            [self addContent:mainWindow->centralWidget()];
-        }
+        contentController = new TitlebarContentController(widget);
         NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
         [center addObserver:self selector:@selector(willChangeFullscreen:)
                        name:NSWindowWillEnterFullScreenNotification object:window];
@@ -81,6 +143,7 @@ static char titlebarControllerKey;
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    delete contentController.data();
     [super dealloc];
 }
 
@@ -105,33 +168,8 @@ static char titlebarControllerKey;
     [self apply];
 }
 
-- (void)addContent:(QWidget*)widget {
-    if (!widget) return;
-    contentWidgets.erase(std::remove_if(contentWidgets.begin(), contentWidgets.end(),
-        [](const TitlebarContent& content) { return content.widget.isNull(); }), contentWidgets.end());
-    for (const auto& content : contentWidgets) {
-        if (content.widget == widget) return;
-    }
-    contentWidgets.push_back({widget, widget->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea)});
-}
-
 - (void)setContentExtended:(BOOL)extended {
-    auto updateMargins = [extended](QWidget* widget, bool originalSafeArea) {
-        if (!widget) return;
-        bool respectsSafeArea = !extended && originalSafeArea;
-        if (widget->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea) == respectsSafeArea) return;
-        // Qt reserves titlebar space even when AppKit extends the content view into it.
-        widget->setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, respectsSafeArea);
-        if (widget->layout()) {
-            widget->layout()->invalidate();
-            widget->layout()->activate();
-        }
-        widget->updateGeometry();
-        widget->update();
-    };
-    for (const auto& content : contentWidgets) {
-        updateMargins(content.widget.data(), content.respectsSafeArea);
-    }
+    if (contentController) contentController->setExtended(extended);
 }
 
 - (void)apply {
@@ -178,12 +216,4 @@ extern "C" void setWindowTitleBarHidden(WId winId, bool hidden, bool buttonsHidd
         [controller release];
     }
     [controller setHidden:hidden buttonsHidden:buttonsHidden colored:colored];
-}
-
-extern "C" void registerWindowTitlebarContent(WId winId, QWidget* content) {
-    NSWindow* window = [(NSView*)winId window];
-    SioyekTitlebarController* controller = objc_getAssociatedObject(window, &titlebarControllerKey);
-    Q_ASSERT(controller != nil);
-    [controller addContent:content];
-    [controller apply];
 }

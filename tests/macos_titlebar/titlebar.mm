@@ -10,9 +10,11 @@
 #include <QSortFilterProxyModel>
 #include <QStringListModel>
 #include <QTableView>
+#include <QDialog>
+#include <QLabel>
+#include <QScrollArea>
 
 extern "C" void setWindowTitleBarHidden(WId, bool, bool, bool);
-extern "C" void registerWindowTitlebarContent(WId, QWidget*);
 
 static void require(bool condition, const char* message) {
     if (!condition) qFatal("%s", message);
@@ -61,7 +63,6 @@ int main(int argc, char** argv) {
 
     for (int i = 0; i < 3; ++i) {
         setWindowTitleBarHidden(main.winId(), true, false, false);
-        registerWindowTitlebarContent(main.winId(), &commandContainer);
         settle();
         require(document->mapTo(&main, QPoint(0, 0)).y() == 0, "Document still has a top gutter");
         require(content->geometry() == main.rect(), "Document container does not fill the window");
@@ -121,7 +122,6 @@ int main(int argc, char** argv) {
         paletteLayout->addWidget(&commands);
         QObject::connect(&filter, &QLineEdit::textChanged, &filtered, &QSortFilterProxyModel::setFilterFixedString);
         palette.setGeometry(50, 0, 400, 300);
-        registerWindowTitlebarContent(main.winId(), &palette);
         palette.show();
         palette.raise();
         filter.setFocus();
@@ -135,6 +135,48 @@ int main(int argc, char** argv) {
         settle();
         require(main.focusWidget() == &filter && filter.text() == "toggle", "Palette lost focus or text on toggle");
         require(palette.contentsMargins().top() == 0, "Palette padding returned after toggle");
+    }
+    {
+        // Cover nested layouts, a hint label and a full-height settings/selector overlay.
+        QWidget overlay(&main);
+        auto outerLayout = new QVBoxLayout(&overlay);
+        outerLayout->setContentsMargins(0, 0, 0, 0);
+        auto nested = new QWidget;
+        auto innerLayout = new QVBoxLayout(nested);
+        innerLayout->setContentsMargins(0, 0, 0, 0);
+        auto hint = new QLabel("Command help");
+        auto options = new QScrollArea;
+        options->setWidget(new QLabel("Options"));
+        innerLayout->addWidget(hint);
+        innerLayout->addWidget(options);
+        outerLayout->addWidget(nested);
+        overlay.setGeometry(0, 0, 300, 300);
+        overlay.show();
+        settle();
+        require(hint->mapTo(&overlay, QPoint(0, 0)).y() == 0, "Nested overlay retained top padding");
+        require(overlay.rect().contains(nested->geometry()), "Nested overlay was clipped");
+        require(options->viewport()->height() > 0, "Selector viewport disappeared");
+        overlay.hide();
+        overlay.show();
+        settle();
+        require(hint->mapTo(&overlay, QPoint(0, 0)).y() == 0, "Reopened overlay retained top padding");
+
+        QDialog dialog(&main);
+        dialog.show();
+        settle();
+        require(dialog.testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea), "Independent dialog margins changed");
+        dialog.hide();
+
+        [[NSNotificationCenter defaultCenter] postNotificationName:NSWindowWillEnterFullScreenNotification object:native];
+        require(overlay.testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea), "Overlay fullscreen margins were not restored");
+        require(nested->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea), "Nested fullscreen margins were not restored");
+        [[NSNotificationCenter defaultCenter] postNotificationName:NSWindowDidExitFullScreenNotification object:native];
+        settle();
+        require(hint->mapTo(&overlay, QPoint(0, 0)).y() == 0, "Nested overlay padding returned after fullscreen notification");
+
+        setWindowTitleBarHidden(main.winId(), false, false, false);
+        require(overlay.testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea), "Overlay original margins were not restored");
+        require(nested->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea), "Nested original margins were not restored");
     }
     // Closed panels must not leave dangling pointers in the titlebar controller.
     setWindowTitleBarHidden(main.winId(), false, false, false);

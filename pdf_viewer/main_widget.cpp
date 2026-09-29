@@ -102,7 +102,6 @@ extern "C" {
 #ifdef Q_OS_MACOS
 extern "C" void changeTitlebarColor(WId, double, double, double, double);
 extern "C" void setWindowTitleBarHidden(WId, bool, bool, bool);
-extern "C" void registerWindowTitlebarContent(WId, QWidget*);
 #endif
 
 extern int next_window_id;
@@ -5110,7 +5109,6 @@ void MainWidget::apply_macos_titlebar() {
         }
     };
     apply(this);
-    registerWindowTitlebarContent(winId(), text_command_line_edit_container);
     if (helper_opengl_widget_) {
         QWidget* helper_window = get_top_level_widget(helper_opengl_widget_);
         if (helper_window != this) {
@@ -5978,9 +5976,6 @@ void MainWidget::handle_horizontal_move(int amount) {
 
 void MainWidget::show_current_widget() {
     if (current_widget_stack.size() > 0) {
-#ifdef Q_OS_MACOS
-        registerWindowTitlebarContent(winId(), current_widget_stack.back());
-#endif
         current_widget_stack.back()->show();
         // we want to show statusbar in touch mode when other windows are visible
         // so when we show a widget, we need to invalidate the ui so the statusbar
