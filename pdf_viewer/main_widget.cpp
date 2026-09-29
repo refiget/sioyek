@@ -5100,6 +5100,16 @@ void MainWidget::toggle_statusbar() {
 
 #ifdef Q_OS_MACOS
 void MainWidget::apply_macos_titlebar() {
+    auto set_content_margins = [this](QWidget* widget) {
+        // Qt also reserves the native titlebar safe area inside full-size content views.
+        widget->setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, !macos_titlebar_hidden);
+        if (widget->layout()) {
+            widget->layout()->invalidate();
+            widget->layout()->activate();
+        }
+        widget->updateGeometry();
+        widget->update();
+    };
     auto apply = [this](QWidget* widget) {
         setWindowTitleBarHidden(widget->winId(), macos_titlebar_hidden,
             MACOS_HIDE_TITLEBAR_BUTTONS, MACOS_TITLEBAR_COLOR[0] >= 0);
@@ -5109,10 +5119,13 @@ void MainWidget::apply_macos_titlebar() {
         }
     };
     apply(this);
+    set_content_margins(this);
+    set_content_margins(central_widget);
     if (helper_opengl_widget_) {
         QWidget* helper_window = get_top_level_widget(helper_opengl_widget_);
         if (helper_window != this) {
             apply(helper_window);
+            set_content_margins(helper_window);
         }
     }
 }
