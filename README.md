@@ -2,6 +2,31 @@
 
 Sioyek is a PDF viewer with a focus on textbooks and research papers.
 
+This repository is a fork of **[ahrm/sioyek](https://github.com/ahrm/sioyek)**,
+created by [ahrm](https://github.com/ahrm). The original application and its existing
+features come from the upstream project.
+
+## Changes in this fork
+
+This fork improves macOS titlebar hiding using kitty's native window approach:
+
+- Hide the titlebar and traffic lights while preserving native edge resizing and rounded corners.
+- Hide only the traffic lights while keeping the titlebar visible.
+- Use `toggle_titlebar` to hide or restore the titlebar for the current window and its helper.
+- Apply preference changes through live reload and restore the appearance after fullscreen.
+- Build separate native Apple Silicon (`arm64`) and Intel (`x86_64`) macOS packages with GitHub Actions.
+
+See [configuration examples](#macos-titlebar-and-traffic-lights) below. Upstream already
+had `toggle_titlebar` and `macos_hide_titlebar`; this fork makes their macOS behavior
+reversible and adds `macos_hide_titlebar_buttons`.
+
+Downloads for this fork are available from successful
+[Build macOS runs](https://github.com/refiget/sioyek/actions/workflows/build_macos.yml)
+and, when published, [this fork's Releases](https://github.com/refiget/sioyek/releases).
+These builds require **macOS 15 or later** and use ad-hoc signing without Apple
+notarization. CI checks compilation, signing, and executable architecture; window
+interaction still needs to be checked on a Mac.
+
 # Development Branch FAQ
 
 ## Q: There are build errors with Qt 5.*.
@@ -14,6 +39,10 @@ A: This is related to macOS quarantine. See https://github.com/ahrm/sioyek/discu
 
 
 ## Contents
+
+* [Changes in this fork](#changes-in-this-fork)
+* [macOS Titlebar Configuration](#macos-titlebar-and-traffic-lights)
+* [Publishing a Release](#publishing-a-release)
 * [Installation](#install)
 * [Documentation](#documentation)
 * [Video Demo](#feature-video-overview)
@@ -22,7 +51,10 @@ A: This is related to macOS quarantine. See https://github.com/ahrm/sioyek/discu
 * [Buy Me a Coffee (or a Book!)](#donation)
 
 ## Install
-### Official packages
+### Upstream packages
+
+The packages below come from the original project and do not include this fork's changes.
+
 There are installers for Windows, macOS and Linux. See [Releases page](https://github.com/ahrm/sioyek/releases).
 
 ### Homebew Cask
@@ -225,3 +257,56 @@ sudo codesign --force --sign - --deep /Applications/sioyek.app
 If you enjoy sioyek, please consider donating to support its development.
 
 <a href="https://www.buymeacoffee.com/ahrm" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174"></a>
+
+
+## Publishing a release
+
+The `Build macOS` workflow builds `development` on push and also supports manual
+runs from the Actions tab. It uploads two artifacts, retained for 30 days:
+
+| Artifact | Mac architecture |
+| --- | --- |
+| `sioyek-macos-arm64` | Apple Silicon, native ARM |
+| `sioyek-macos-x86_64` | Intel |
+
+A successful build uploads artifacts; it does not automatically publish a Release.
+To publish the same binaries, use the [GitHub CLI](https://cli.github.com/) with an
+account that has write access to `refiget/sioyek`:
+
+1. Choose a successful `Build macOS` run with both jobs completed. Copy its run ID
+   from the URL, and download its artifacts before they expire.
+2. Use the commands below to attach the application ZIP files to a pre-release.
+   Change `build_run` and `release_tag` for later releases. The tag targets the exact
+   commit used by the build, even if `development` has since moved.
+3. Open the new Release page and check the notes and both download links.
+
+```sh
+# This run built the first version of the titlebar changes successfully.
+build_run=36455083534
+release_tag=titlebar-2026.09.29
+
+release_commit=$(gh run view "$build_run" --repo refiget/sioyek --json headSha --jq .headSha)
+gh run download "$build_run" --repo refiget/sioyek \
+  --name sioyek-macos-arm64 --name sioyek-macos-x86_64 \
+  --dir "release-assets/$release_tag"
+
+gh release create "$release_tag" \
+  "release-assets/$release_tag/sioyek-macos-arm64/sioyek-macos-arm64.zip" \
+  "release-assets/$release_tag/sioyek-macos-x86_64/sioyek-macos-x86_64.zip" \
+  --repo refiget/sioyek \
+  --target "$release_commit" \
+  --title "Sioyek macOS titlebar — $release_tag" \
+  --notes "Adds reversible macOS titlebar hiding and independent traffic-light hiding while retaining native resizing. Includes native Apple Silicon and Intel builds. Requires macOS 15+. Ad-hoc signed; not notarized by Apple." \
+  --prerelease
+```
+
+The `gh release create` command publishes immediately. Add `--draft` to prepare a
+private draft instead, then publish it from the Releases page after reviewing it.
+Remove `--prerelease` when publishing a version you consider stable.
+
+Use a `titlebar-...` tag for this process. Tags beginning with `v` match the inherited
+`Build Release` and `Preview Release` workflows, which use a separate, older
+multi-platform build and release process.
+
+CLI reference: [download workflow artifacts](https://cli.github.com/manual/gh_run_download)
+and [create a Release](https://cli.github.com/manual/gh_release_create).
