@@ -38,6 +38,14 @@ jobs:
           modules: 'qtmultimedia qtspeech qtshadertools'
           cache: true
 
+      - name: Check native titlebar layout
+        run: |
+          mkdir -p build-titlebar-check
+          cd build-titlebar-check
+          qmake ../tests/macos_titlebar/titlebar.pro QMAKE_APPLE_DEVICE_ARCHS=${{ matrix.arch }}
+          make -j"$(sysctl -n hw.logicalcpu)"
+          ./titlebar_regression
+
       - name: Build MuPDF
         run: make -C mupdf HAVE_GLUT=no -j"$(sysctl -n hw.logicalcpu)"
 
