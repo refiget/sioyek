@@ -3,6 +3,8 @@
 #include <QLayout>
 #include <QMainWindow>
 #include <QPointer>
+#include <algorithm>
+#include <vector>
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -26,6 +28,13 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
     window.backgroundColor = [NSColor colorWithRed:red green:green blue:blue alpha: alpha];
 }
 
+struct TitlebarContent {
+    QPointer<QWidget> widget;
+    bool respectsSafeArea;
+};
+
+static char titlebarControllerKey;
+
 @interface SioyekTitlebarController : NSObject {
     NSWindow* window;
     BOOL hideTitlebar;
@@ -35,14 +44,12 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
     BOOL originalFullSizeContent;
     BOOL originalTransparent;
     NSWindowTitleVisibility originalTitleVisibility;
-    QPointer<QWidget> qtWindow;
-    QPointer<QWidget> qtContent;
-    bool originalWindowSafeArea;
-    bool originalContentSafeArea;
+    std::vector<TitlebarContent> contentWidgets;
 }
 - (instancetype)initWithWindow:(NSWindow*)nativeWindow widget:(QWidget*)widget;
 - (void)setHidden:(BOOL)hidden buttonsHidden:(BOOL)buttonsHidden colored:(BOOL)colored;
 - (void)setContentExtended:(BOOL)extended;
+- (void)addContent:(QWidget*)widget;
 - (void)apply;
 @end
 
@@ -55,12 +62,10 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
         originalFullSizeContent = (window.styleMask & NSWindowStyleMaskFullSizeContentView) != 0;
         originalTransparent = window.titlebarAppearsTransparent;
         originalTitleVisibility = window.titleVisibility;
-        qtWindow = widget;
+        [self addContent:widget];
         if (auto mainWindow = qobject_cast<QMainWindow*>(widget)) {
-            qtContent = mainWindow->centralWidget();
+            [self addContent:mainWindow->centralWidget()];
         }
-        originalWindowSafeArea = qtWindow && qtWindow->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea);
-        originalContentSafeArea = qtContent && qtContent->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea);
         NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
         [center addObserver:self selector:@selector(willChangeFullscreen:)
                        name:NSWindowWillEnterFullScreenNotification object:window];
@@ -100,6 +105,16 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
     [self apply];
 }
 
+- (void)addContent:(QWidget*)widget {
+    if (!widget) return;
+    contentWidgets.erase(std::remove_if(contentWidgets.begin(), contentWidgets.end(),
+        [](const TitlebarContent& content) { return content.widget.isNull(); }), contentWidgets.end());
+    for (const auto& content : contentWidgets) {
+        if (content.widget == widget) return;
+    }
+    contentWidgets.push_back({widget, widget->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea)});
+}
+
 - (void)setContentExtended:(BOOL)extended {
     auto updateMargins = [extended](QWidget* widget, bool originalSafeArea) {
         if (!widget) return;
@@ -114,8 +129,9 @@ extern "C" void changeTitlebarColor(WId winId, double red, double green, double 
         widget->updateGeometry();
         widget->update();
     };
-    updateMargins(qtWindow.data(), originalWindowSafeArea);
-    updateMargins(qtContent.data(), originalContentSafeArea);
+    for (const auto& content : contentWidgets) {
+        updateMargins(content.widget.data(), content.respectsSafeArea);
+    }
 }
 
 - (void)apply {
@@ -155,7 +171,6 @@ extern "C" void setWindowTitleBarHidden(WId winId, bool hidden, bool buttonsHidd
     NSWindow* window = [(NSView*)winId window];
     if (window == nil) return;
 
-    static char titlebarControllerKey;
     SioyekTitlebarController* controller = objc_getAssociatedObject(window, &titlebarControllerKey);
     if (controller == nil) {
         controller = [[SioyekTitlebarController alloc] initWithWindow:window widget:QWidget::find(winId)];
@@ -163,4 +178,12 @@ extern "C" void setWindowTitleBarHidden(WId winId, bool hidden, bool buttonsHidd
         [controller release];
     }
     [controller setHidden:hidden buttonsHidden:buttonsHidden colored:colored];
+}
+
+extern "C" void registerWindowTitlebarContent(WId winId, QWidget* content) {
+    NSWindow* window = [(NSView*)winId window];
+    SioyekTitlebarController* controller = objc_getAssociatedObject(window, &titlebarControllerKey);
+    Q_ASSERT(controller != nil);
+    [controller addContent:content];
+    [controller apply];
 }
